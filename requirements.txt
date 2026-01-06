@@ -2,9 +2,11 @@
 --extra-index-url https://pypi.org/simple
 
 furhat-remote-api==1.0.2
-ipykernel==7.0.1  # needed for Jupyter notebooks
+google-genai==1.46.0
+ipykernel==7.0.1
 numpy==1.26.4
 opencv-python==4.11.0.86
+python-dotenv==1.2.1
 torch==2.9.1
 torchvision==0.24.1
 tqdm==4.67.1
@@ -21,7 +23,6 @@ tqdm==4.67.1
 # accelerate==1.11.0  # needed for transformers to work properly
 # furhat-remote-api==1.0.2  # needed for Furhat interaction (Lab 2)
 # # LLM integration
-# google-genai==1.46.0  # needed for Google GenAI
 # # needed by openface
 # click==8.3.0
 # pandas==2.3.3
