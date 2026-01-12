@@ -1,7 +1,7 @@
 .env
 
+*_image.*
 code/*_image.*
-code/webcam_image.*
 
 ### JupyterNotebooks ###
 # gitignore template for Jupyter Notebooks
