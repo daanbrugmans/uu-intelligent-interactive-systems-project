@@ -1,3 +1,8 @@
+.env
+
+*_image.*
+code/*_image.*
+
 ### JupyterNotebooks ###
 # gitignore template for Jupyter Notebooks
 # website: http://jupyter.org/
