@@ -336,7 +336,7 @@ def main():
     customer_speech = ""  # What the customer said
     
     # Timing
-    MAX_ROUNDS = 6  # End conversation after this many rounds
+    MAX_ROUNDS = 10  # Extended to 10 for ~2 minute conversation with multiple topics
     last_turn_end_time = 0
     listening_countdown = 0  # For display
     started_listening = False  # Track if we started listening
@@ -371,9 +371,19 @@ def main():
             elif round_num == 1:
                 current_stage = "engagement"
             elif round_num == 2:
-                current_stage = "assistance"
+                current_stage = "weather"
             elif round_num == 3:
+                current_stage = "discounts"
+            elif round_num == 4:
+                current_stage = "assistance"
+            elif round_num == 5:
+                current_stage = "transition_to_payment"
+            elif round_num == 6:
                 current_stage = "payment"
+            elif round_num == 7:
+                current_stage = "payment_processing"
+            elif round_num == 8:
+                current_stage = "closing"
             else:
                 current_stage = "farewell"
         
@@ -391,15 +401,12 @@ def main():
                 last_turn_end_time = time.time()
                 
                 # Check if conversation should end
+                # ONLY end after: (1) payment received AND (2) receipt given
                 if session.is_complete:
                     mode = ConversationMode.ENDED
                     print("\n🏁 Conversation completed! Thank you for shopping!")
-                elif len(session.conversation_history) >= MAX_ROUNDS:
-                    mode = ConversationMode.ENDED
-                    print("\n🏁 Conversation completed!")
                 elif session.payment_method and session.asked_payment:
-                    # Payment method was just confirmed - go directly to closing (no listen needed)
-                    # Check if we already gave the receipt (contains "receipt" or "change")
+                    # Payment method was confirmed - check if receipt was given
                     last_response = session.agent_response.lower()
                     if "receipt" in last_response or "change" in last_response or "thank you" in last_response:
                         mode = ConversationMode.ENDED
@@ -409,6 +416,10 @@ def main():
                         print("\n⏭️  Payment confirmed - proceeding to receipt...")
                         mode = ConversationMode.PROCESSING
                         customer_speech = ""  # No speech needed
+                elif len(session.conversation_history) >= MAX_ROUNDS:
+                    # Last resort: stop if we've hit max rounds (should not reach here normally)
+                    mode = ConversationMode.ENDED
+                    print("\n🏁 Conversation completed! (max rounds reached)")
                 else:
                     mode = ConversationMode.LISTENING
                     started_listening = False

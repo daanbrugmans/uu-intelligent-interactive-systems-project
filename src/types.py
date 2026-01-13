@@ -107,6 +107,10 @@ class ConversationState:
     customer_speech: str = ""  # What the customer said (speech-to-text)
     asked_payment: bool = False  # Whether we've asked cash or card
     
+    # Item lookup tracking
+    looking_up_item: bool = False  # Whether we're looking up a missing item
+    item_found: Optional[bool] = None  # Result of lookup (True/False/None)
+    
     def add_emotion(self, emotion: Emotion) -> None:
         """Record a detected emotion."""
         self.emotion_history.append(emotion)
