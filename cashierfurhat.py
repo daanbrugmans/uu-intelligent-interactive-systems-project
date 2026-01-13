@@ -35,7 +35,61 @@ from config.settings import Config
 FURHAT_CHARACTER = "Isabel"
 FURHAT_MASK = "Adult"
 FURHAT_VOICE = "Joanna"
-MAX_ROUNDS = 8
+MAX_ROUNDS = 10  # Extended to match test_full_integration
+
+
+# ============================================================================
+# FURHAT EMOTION EXPRESSIONS
+# ============================================================================
+
+def express_emotion(furhat, emotion_type, context="default"):
+    """
+    Make Furhat express emotions with appropriate gestures and expressions.
+    
+    Args:
+        furhat: FurhatRemoteAPI instance
+        emotion_type: EmotionType (POSITIVE, NEUTRAL, NEGATIVE)
+        context: Stage context (introduction, payment, assistance, etc.)
+    """
+    try:
+        if emotion_type == EmotionType.POSITIVE:
+            # Happy/satisfied
+            furhat.gesture(name="Smile")
+            time.sleep(0.3)
+        elif emotion_type == EmotionType.NEGATIVE:
+            # Empathetic/concerned
+            if context == "assistance" or context == "handling_negatives":
+                # Listening carefully, showing concern
+                furhat.gesture(name="Nod")
+                time.sleep(0.2)
+            else:
+                # General empathetic expression
+                furhat.gesture(name="Sad")
+                time.sleep(0.3)
+        else:  # NEUTRAL
+            # Calm and professional
+            furhat.gesture(name="Nod")
+            time.sleep(0.2)
+    except Exception as e:
+        pass  # Silently fail if Furhat doesn't support the gesture
+
+
+def get_stage_context_gesture(stage):
+    """Get appropriate Furhat gesture for conversation stage."""
+    gestures = {
+        "introduction": "BigSmile",     # Big welcoming smile
+        "engagement": "Smile",           # Friendly
+        "weather": "SmallSmile",         # Light smile
+        "discounts": "BrowRaise",        # Excited about deals
+        "assistance": "Nod",             # Listening/helpful
+        "handling_negatives": "Sad",     # Empathetic
+        "handling_negatives_result": "Nod",  # Understanding
+        "transition_to_payment": "Smile",    # Moving along naturally
+        "payment": "Nod",                # Waiting for answer
+        "payment_processing": "Nod",     # Processing
+        "closing": "Smile",              # Warm goodbye
+    }
+    return gestures.get(stage, "Nod")
 
 
 class Mode(Enum):
@@ -166,16 +220,54 @@ def main():
     confidence = 0.0
     response = ""
     speech = ""
+    started_listening = False
     
-    def get_stage():
-        if session.is_complete:
-            return "complete"
+    def get_stage(round_num):
+        """Get stage name based on round number - STRICT SEQUENCE."""
+        stages_sequence = [
+            "introduction",          # Round 0
+            "engagement",            # Round 1
+            "weather",               # Round 2
+            "discounts",             # Round 3
+            "assistance",            # Round 4
+            "transition_to_payment", # Round 5
+            "payment",               # Round 6
+            "payment_processing",    # Round 7
+            "closing",               # Round 8
+            "farewell"               # Round 9
+        ]
+        
+        # Handle payment method confirmation
         if session.payment_method:
             return "closing"
-        if session.asked_payment:
+        if session.asked_payment and not session.payment_method:
             return "payment_processing"
-        stages = ["introduction", "engagement", "assistance", "payment", "farewell"]
-        return stages[min(session.conversation_round, 4)]
+        
+        # Handle item lookup flow
+        if session.looking_up_item:
+            if session.item_found is None:
+                return "handling_negatives_result"
+            else:
+                if session.item_found:
+                    session.total_amount += 15.0
+                session.item_found = None
+                session.looking_up_item = False
+        
+        # Handle "no" at assistance stage
+        if round_num == 4 and session.customer_speech:
+            speech_lower = session.customer_speech.lower()
+            no_keywords = ["no", "didn't", "don't", "nope", "nah", "didn't find", "don't have", "can't find", "couldn't find", "don't see"]
+            if any(kw in speech_lower for kw in no_keywords):
+                session.looking_up_item = True
+                return "handling_negatives"
+        
+        if session.is_complete:
+            return "complete"
+        
+        # Return stage from sequence
+        if round_num < len(stages_sequence):
+            return stages_sequence[round_num]
+        return "farewell"
     
     # ──────────────────────────────────────────────────────────────
     # MAIN LOOP
@@ -188,7 +280,7 @@ def main():
         
         # Always detect emotion from webcam
         emotion, confidence = classifier.predict(frame)
-        stage = get_stage() if mode != Mode.WAITING else "waiting"
+        stage = get_stage(session.conversation_round) if mode != Mode.WAITING else "waiting"
         
         # ──────────────────────────────────────────────────────────
         # STATE MACHINE
@@ -224,17 +316,25 @@ def main():
             if session.payment_method and any(x in resp_lower for x in ["receipt", "change", "thank you", "goodbye"]):
                 session.is_complete = True
             
+            # Get current stage for emotion expression
+            current_stage = get_stage(session.conversation_round)
+            
+            # Furhat expresses emotion
+            express_emotion(furhat, emotion.emotion_type, current_stage)
+            
+            # Try stage-specific gesture, fallback to emotion-based
+            try:
+                gesture = get_stage_context_gesture(current_stage)
+                furhat.gesture(name=gesture)
+            except:
+                pass
+            
             # Furhat speaks
             mode = Mode.SPEAKING
-            if emotion.emotion_type == EmotionType.POSITIVE:
-                furhat.gesture(name="Smile")
-            else:
-                furhat.gesture(name="Nod")
-            
             furhat.say(text=response, blocking=True)
             
             # Decide next state
-            if session.is_complete or len(session.conversation_history) >= MAX_ROUNDS:
+            if session.is_complete:
                 mode = Mode.ENDED
                 print("\n🏁 Conversation complete!")
             elif session.payment_method and session.asked_payment:
@@ -243,11 +343,19 @@ def main():
                     mode = Mode.ENDED
                 else:
                     mode = Mode.PROCESSING  # Generate receipt
+            elif len(session.conversation_history) >= MAX_ROUNDS:
+                mode = Mode.ENDED
+                print("\n🏁 Max rounds reached!")
             else:
                 mode = Mode.LISTENING
+                started_listening = False
         
         elif mode == Mode.LISTENING:
             print("🎤 Furhat listening...")
+            
+            # Express listening emotion
+            express_emotion(furhat, emotion.emotion_type, "assistance")
+            furhat.gesture(name="Nod")
             
             # Furhat listens for customer speech
             result = furhat.listen()
@@ -255,6 +363,7 @@ def main():
             
             if speech:
                 print(f"🗣️ Heard: \"{speech}\"")
+                session.customer_speech = speech  # Store what customer said
             else:
                 print("🔇 No speech detected")
             

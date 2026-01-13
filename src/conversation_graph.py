@@ -159,11 +159,51 @@ class ConversationGraph:
         - Ask how their day is going
         - Mention something about shopping
 
-        Keep it brief and natural - one or two sentences.""",
-        "assistance": """Offer to help:
-        - Ask if they found everything
-        - Mention you're ready to help checkout
-        Keep it brief and friendly.""",
+Keep it brief and natural - one or two sentences.""",
+        
+        "weather": """Continue small talk about weather or season:
+- Comment on current weather
+- Or ask about their day
+- Keep it friendly and conversational
+
+One sentence, natural tone.""",
+        
+        "discounts": """Mention store promotions or special offers:
+- We have great deals today
+- Special items on sale
+- Check out the discounts
+
+Keep it brief and offer-focused.""",
+        
+        "assistance": """Offer to help or check on their shopping:
+- Did you find everything you were looking for?
+- Need help finding anything?
+- Everything okay with your items?
+
+Be helpful and friendly.""",
+        
+        "handling_negatives": """Customer said they didn't find or get something.
+YOU: Look it up for them, be genuine and helpful:
+- "I'll look that up for you right now..."
+- "Let me check if we have that in the back..."
+- "One moment, let me see what I can find..."
+
+Sound natural and reassuring, like you really care about helping them.""",
+        
+        "handling_negatives_result": """You looked it up. Choose ONE outcome:
+OUTCOME A (Item found): "Great news! I found it - that'll be {extra_cost} extra."
+OUTCOME B (Out of stock): "Unfortunately it's out of stock, but we're getting more next week."
+
+Pick whichever feels more natural. If found, mention extra cost. If not, reassure them.
+Be brief and conversational, not robotic.""",
+        
+        "transition_to_payment": """Transition naturally to payment:
+- Ready to wrap up?
+- Let me ring this up for you
+- That will be all? Ready to pay?
+
+Smooth, natural transition.""",
+        
         "payment": """TIME TO ASK FOR PAYMENT:
         Say the total and ask for payment method.
         Example: "Alright, your total is {total} SEK. Cash or card?"
@@ -404,19 +444,19 @@ class ConversationGraph:
 
         # Call Gemini (with no retries - fail fast)
         try:
-            logger.info(f"🤖 Calling Gemini API for round {round_num}...")
+            logger.info(f" Calling Gemini API for round {round_num}...")
             response = self.llm.invoke(messages)
             state["state"].agent_response = response.content.strip()
-            logger.info(f'✅ Response: "{state["state"].agent_response}"')
-
+            logger.info(f" Response: \"{state['state'].agent_response}\"")
+            
         except Exception as e:
             error_msg = str(e)
 
             # Identify error type for clear logging
             if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
-                logger.warning("⚠️ QUOTA EXHAUSTED - Using fallback (no retry)")
+                logger.warning(" QUOTA EXHAUSTED - Using fallback (no retry)")
             elif "401" in error_msg or "403" in error_msg:
-                logger.error("❌ API KEY INVALID - Check your .env file")
+                logger.error("API KEY INVALID - Check your .env file")
             else:
                 logger.error(f"❌ LLM error: {e}")
 
@@ -592,34 +632,68 @@ class ConversationGraph:
             time.sleep(sleep_time)
 
         self._last_api_call_time = time.time()
-
-    def _get_conversation_stage(
-        self, round_num: int, state: ConversationState = None
-    ) -> str:
-        """Map conversation round and state to stage name."""
-        # Payment flow takes priority
-        if state:
-            # If we have payment method, go to closing
-            if state.payment_method:
-                return "closing"
-            # If we've asked for payment but don't have the method yet
-            if state.asked_payment and not state.payment_method:
-                return "payment_processing"
-
-        # Use round_num which is the current round we're generating
-        # (conversation_history is only updated AFTER response is generated)
-        actual_round = round_num
-
-        # Normal conversation flow based on round number
-        if actual_round == 0:
-            return "introduction"
-        elif actual_round == 1:
-            return "engagement"
-        elif actual_round == 2:
-            return "assistance"
-        elif actual_round == 3:
-            return "payment"  # Ask cash or card
+    
+    def _get_conversation_stage(self, round_num: int, state: ConversationState = None) -> str:
+        """
+        Map conversation round to stage name - STRICT, FOOLPROOF progression.
+        
+        This enforces a rigid stage sequence that CANNOT be interrupted or skipped,
+        ensuring consistent conversation flow regardless of customer speech or emotion.
+        """
+        # STRICT SEQUENCE - follows this ALWAYS unless payment method is confirmed
+        stages_sequence = [
+            "introduction",          # Round 0: Greet + AI disclosure
+            "engagement",            # Round 1: Small talk (day/weather)
+            "weather",               # Round 2: Weather or season comment
+            "discounts",             # Round 3: Mention special offers
+            "assistance",            # Round 4: Ask if found everything
+            "transition_to_payment", # Round 5: Smooth transition to payment
+            "payment",               # Round 6: Ask cash or card + total
+            "payment_processing",    # Round 7: Confirm payment method
+            "closing",               # Round 8: Receipt + goodbye
+            "farewell"               # Round 9+: Final goodbye
+        ]
+        
+        # Handle payment method confirmation (only override after asking for payment)
+        if state and state.payment_method:
+            # Customer already chose cash/card, skip to closing
+            return "closing"
+        
+        # If waiting for payment method (asked but not received), stay in payment_processing
+        if state and state.asked_payment and not state.payment_method:
+            return "payment_processing"
+        
+        # Handle item lookup flow (only occurs during assistance stage)
+        if state and state.looking_up_item:
+            if state.item_found is None:
+                # Still looking up
+                return "handling_negatives_result"
+            else:
+                # Lookup complete - add cost if found
+                if state.item_found:
+                    state.total_amount += 15.0
+                # Reset lookup flags
+                state.item_found = None
+                state.looking_up_item = False
+                # Continue with normal sequence (don't skip rounds)
+        
+        # STRICT: Use only round_num to determine stage
+        # This ensures conversation always follows the sequence
+        if round_num < len(stages_sequence):
+            stage = stages_sequence[round_num]
+            
+            # Special: Check for "no" only at ASSISTANCE stage (round 4)
+            # This triggers item lookup flow WITHIN the same round
+            if stage == "assistance" and state and state.customer_speech:
+                speech_lower = state.customer_speech.lower()
+                no_keywords = ["no", "didn't", "don't", "nope", "nah", "didn't find", "don't have", "can't find", "couldn't find", "don't see"]
+                if any(kw in speech_lower for kw in no_keywords):
+                    state.looking_up_item = True
+                    return "handling_negatives"  # Offer to look it up
+            
+            return stage
         else:
+            # Beyond sequence length, return farewell
             return "farewell"
 
     def _get_fallback_response(
@@ -646,11 +720,67 @@ class ConversationGraph:
                 EmotionType.NEUTRAL: "Can you believe it's already January? Time flies!",
                 EmotionType.NEGATIVE: "We just got some new items in if you want to take a look.",
             }
+        elif stage == "weather":
+            responses = {
+                EmotionType.POSITIVE: "Beautiful day out there, I hope you're enjoying it!",
+                EmotionType.NEUTRAL: "January weather keeps things interesting, doesn't it?",
+                EmotionType.NEGATIVE: "Hope you found what you needed despite the weather!"
+            }
+        elif stage == "discounts":
+            responses = {
+                EmotionType.POSITIVE: "By the way, we have some amazing deals running this week!",
+                EmotionType.NEUTRAL: "Just so you know, there are some great discounts on items today.",
+                EmotionType.NEGATIVE: "Don't forget to check out our special offers - might find something great!"
+            }
         elif stage == "assistance":
             responses = {
                 EmotionType.POSITIVE: "Did you find everything you were looking for?",
-                EmotionType.NEUTRAL: "Ready to check out whenever you are!",
-                EmotionType.NEGATIVE: "Take your time, no rush at all.",
+                EmotionType.NEUTRAL: "Was there anything else you needed to find?",
+                EmotionType.NEGATIVE: "Did you locate everything alright? I'm here if you need anything."
+            }
+        elif stage == "handling_negatives":
+            responses = {
+                EmotionType.POSITIVE: "No problem at all! Let me check the storage for you right now...",
+                EmotionType.NEUTRAL: "Not a problem! Let me look that up for you.",
+                EmotionType.NEGATIVE: "I completely understand. Let me see what I can find for you."
+            }
+        elif stage == "handling_negatives_result":
+            # Randomly decide if item was found (70% found, 30% not found)
+            import random
+            found = random.random() < 0.7
+            if found:
+                responses = {
+                    EmotionType.POSITIVE: "Great news! I found it - that'll be 15 SEK extra, so your new total is {adjusted_total}.",
+                    EmotionType.NEUTRAL: "Perfect! I found it. That'll be 15 SEK more for you.",
+                    EmotionType.NEGATIVE: "Good news! I managed to find it for you. It's 15 SEK extra."
+                }
+                # Format with adjusted total
+                if state:
+                    state.total_amount += 15.0
+                    state.item_found = True
+                response = responses.get(emotion_type, "Great! I found it!")
+                return response.format(adjusted_total=f"{(state.total_amount if state else 315):.2f}")
+            else:
+                # Item not found - give reasons
+                reasons = [
+                    "Unfortunately it's out of stock, but we're getting more next week.",
+                    "I'm sorry, we don't have that available right now, but we can order it for you.",
+                    "That one's sold out at the moment, but it should be back soon.",
+                    "We don't currently have that in stock, but I can put you on the list."
+                ]
+                responses = {
+                    EmotionType.POSITIVE: random.choice(reasons),
+                    EmotionType.NEUTRAL: random.choice(reasons),
+                    EmotionType.NEGATIVE: random.choice(reasons)
+                }
+                if state:
+                    state.item_found = False
+                return responses.get(emotion_type, random.choice(reasons))
+        elif stage == "transition_to_payment":
+            responses = {
+                EmotionType.POSITIVE: "Perfect! Let me ring this up for you.",
+                EmotionType.NEUTRAL: "Alright, let me get that ready for you.",
+                EmotionType.NEGATIVE: "Of course, let me help you check out."
             }
         elif stage == "payment":
             total = state.total_amount if state else 299.00
