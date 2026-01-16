@@ -47,6 +47,7 @@ class AgentState(TypedDict):
   customer_speech: str
 
 
+
 class ConversationGraph:
   """Conversation system using LangGraph with emotion-based routing.
   
@@ -405,8 +406,14 @@ The customer is currently {emotion_observation}.
 Your tone: {tone}
 This is turn {num_turns + 1} of the conversation.
 
-=== CURRENT TASK ({stage_name.upper()}) ===
-{stage_prompt}
+        === CURRENT TASK ({stage_name.upper()}) ===
+        {stage_prompt}
+
+        === CRITICAL RULES ===
+        1. NEVER repeat something you already said - check history below
+        2. Keep responses SHORT (1-2 sentences max)
+        3. Be NATURAL - like a real person
+        4. Do NOT introduce yourself again if you already did""
 
 === CRITICAL RULES ===
 1. NEVER repeat something you already said - check history below
